@@ -1,8 +1,10 @@
+import os
+import torch
 import click
 
-from torch import nn
+from torch import nn, optim
 from torchvision import transforms
-from torch.utils.data import random_split
+from torch.utils.data import random_split, DataLoader
 
 from ignite.engine import Engine, Events, create_supervised_trainer, create_supervised_evaluator
 from ignite.metrics import Accuracy, Precision, Recall, RunningAverage, Loss
@@ -27,8 +29,8 @@ def cli():
 @click.option('--min-delta', show_default=True, default=0.005, help='Minimum improvement between epochs to reset early stopping')
 @click.option('--threads', default=min(len(os.sched_getaffinity(0)), 4))
 @click.argument('ground_truth', nargs=1)
-def train(name, load, lrate, weight_decay, device, validation, refine_features,
-          lag, min_delta, threads, weigh_loss, augment, ground_truth):
+def train(name, load, lrate, weight_decay, device, refine_features, lag,
+          min_delta, threads, ground_truth):
 
 
     print('model output name: {}'.format(name))
@@ -36,11 +38,12 @@ def train(name, load, lrate, weight_decay, device, validation, refine_features,
 
     data_set = dataset.CutoutDataset(ground_truth)
 
-    train_split = len(data_set)*0.9
+    train_split = int(len(data_set)*0.9)
     train_set, val_set = random_split(data_set, [train_split, len(data_set)-train_split])
-    train_data_loader = DataLoader(dataset=train_set, num_workers=workers, batch_size=1, shuffle=True, pin_memory=True)
-    val_data_loader = DataLoader(dataset=val_set, num_workers=workers, batch_size=1, pin_memory=True)
+    train_data_loader = DataLoader(dataset=train_set, num_workers=threads, batch_size=1, shuffle=True, pin_memory=True)
+    val_data_loader = DataLoader(dataset=val_set, num_workers=threads, batch_size=1, pin_memory=True)
 
+    print('Got {}/{} samples in train/validation set'.format(len(train_set), len(val_set)))
     net = model.ClassificationNet(refine_features)
 
     if load:
@@ -49,16 +52,16 @@ def train(name, load, lrate, weight_decay, device, validation, refine_features,
         net.refine_features(refine_features)
 
     criterion = nn.BCEWithLogitsLoss()
-    optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=lrate, weight_decay=weight_decay)
+    optimizer = optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lrate, weight_decay=weight_decay)
 
     def score_function(engine):
         val_loss = engine.state.metrics['loss']
         return -val_loss
 
     trainer = create_supervised_trainer(net, optimizer, criterion, device=device, non_blocking=True)
-    evaluator = create_supervised_evaluator(model, device=device, non_blocking=True, metrics={'accuracy': Accuracy(output_transform=output_preprocess),
-                                                                                              'precision': Precision(output_transform=output_preprocess),
-                                                                                              'recall': Recall(output_transform=output_preprocess),
+    evaluator = create_supervised_evaluator(net, device=device, non_blocking=True, metrics={'accuracy': Accuracy(),
+                                                                                              'precision': Precision(),
+                                                                                              'recall': Recall(),
                                                                                               'loss': Loss(criterion)})
 
     ckpt_handler = ModelCheckpoint('.', name, save_interval=1, n_saved=10, require_empty=False)
@@ -69,7 +72,7 @@ def train(name, load, lrate, weight_decay, device, validation, refine_features,
     progress_bar.attach(trainer, ['loss'])
 
     evaluator.add_event_handler(Events.COMPLETED, est_handler)
-    trainer.add_event_handler(event_name=Events.EPOCH_COMPLETED, handler=ckpt_handler, to_save={'net': model})
+    trainer.add_event_handler(event_name=Events.EPOCH_COMPLETED, handler=ckpt_handler, to_save={'net': net})
     trainer.add_event_handler(event_name=Events.ITERATION_COMPLETED, handler=TerminateOnNan())
 
     @trainer.on(Events.EPOCH_COMPLETED)
@@ -94,13 +97,11 @@ def pred(model, device, images):
     with open(model, 'rb') as fp:
         net = torch.load(fp, map_location=device)
 
-    transform = transforms.Compose([transforms.Resize(1200), transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
-
     with torch.no_grad():
         for img in images:
             print('transforming image {}'.format(img))
             im = Image.open(img).convert('RGB')
-            norm_im = transform(im)
+            norm_im = dataset.default_transforms(im)
             print('running forward pass')
             o = m.forward(norm_im.unsqueeze(0))
             o = torch.sigmoid(o)

@@ -7,7 +7,7 @@ from pathlib import Path
 from torchvision import transforms
 
 
-default_transforms = transforms.Compose([transforms.Resize(1200), transforms.Lambda(lambda x: x.convert('RGB')), transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+default_transforms = transforms.Compose([transforms.Resize((900,900)), transforms.Lambda(lambda x: x.convert('RGB')), transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
 
 
 class CutoutDataset(data.Dataset):

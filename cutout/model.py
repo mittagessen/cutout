@@ -28,13 +28,14 @@ def _wi(m):
 
 class ClassificationNet(nn.Module):
     """
-    ResNet-101
+    ResNet-152
     """
     def __init__(self, refine_features=False):
         super(ClassificationNet, self).__init__()
-        self.resnet = models.resnet101(pretrained=True)
+        self.resnet = models.resnet152(pretrained=True)
         self.refine_features(refine_features)
-        self.fc = nn.Linear(self.resnet.fc.in_features, 1).
+        self.fc = nn.Linear(self.resnet.fc.in_features, 1)
+        self.adamaxpool = nn.AdaptiveMaxPool2d(1)
 
     def refine_features(self, refine_features):
         if not refine_features:
@@ -42,19 +43,21 @@ class ClassificationNet(nn.Module):
                 param.requires_grad = False
 
     def forward(self, x):
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.maxpool(x)
+        x = self.resnet.conv1(x)
+        x = self.resnet.bn1(x)
+        x = self.resnet.relu(x)
+        x = self.resnet.maxpool(x)
 
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
+        x = self.resnet.layer1(x)
+        x = self.resnet.layer2(x)
+        x = self.resnet.layer3(x)
+        x = self.resnet.layer4(x)
 
-        x = self.avgpool(x)
-        x = x.view(x.size(0), -1)
-        return self.fc(x)
+        x = self.resnet.avgpool(x)
+        x = x.permute(0, 2, 3, 1)
+        x = self.fc(x).permute(0, 3, 1, 2)
+        x = self.adamaxpool(x)
+        return x.squeeze().unsqueeze(0)
 
     def init_weights(self):
         self.fc.apply(_wi)
